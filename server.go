@@ -25,10 +25,11 @@ const (
 type server struct {
 	secret string
 
-	mu       sync.Mutex
-	client   *http.Client
-	hijacked net.Conn
-	done     chan struct{} // closed when the current attachment should be torn down
+	mu            sync.Mutex
+	client        *http.Client
+	hijacked      net.Conn
+	done          chan struct{} // closed when the current attachment should be torn down
+	attachHeaders http.Header  // headers from the most recent attach request
 }
 
 func runServer(addr, secret string) error {
@@ -108,6 +109,7 @@ func (s *server) handleAttach(w http.ResponseWriter, r *http.Request) {
 	s.client = httpc
 	s.hijacked = conn
 	s.done = done
+	s.attachHeaders = r.Header.Clone()
 	s.mu.Unlock()
 
 	log.Printf("client attached from %s", conn.RemoteAddr())

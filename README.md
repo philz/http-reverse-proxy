@@ -12,26 +12,36 @@ that connection.
                           hijacked TCP)
 ```
 
-B initiates the TCP connection to A. A hijacks it, upgrades to HTTP/2,
-and uses it as a transport to reverse-proxy all incoming requests to B.
-B forwards them to a local port.
+This is analogous to `ssh -R 1234:localhost:1234 remote` — the
+firewalled machine initiates the outbound connection, and traffic
+flows back through it in reverse. Instead of SSH, this uses HTTP
+connection hijacking and HTTP/2 multiplexing as the transport, so
+the proxied traffic is plain HTTP and works with standard HTTP
+clients and servers with no tunneling overhead.
 
 ## Usage
 
 On the public machine (A):
 
-    http-reverse-proxy --listen :8000 --secret mytoken
+    http-reverse-proxy listen --addr :8000 --secret mytoken
 
 On the firewalled machine (B):
 
-    http-reverse-proxy --forward 1234 A:8000 --secret mytoken
+    http-reverse-proxy attach --forward 1234 --secret mytoken A:8000
 
 Requests to `A:8000` are now forwarded to `B:1234`.
+
+### Extra headers
+
+Pass `-H` to send additional headers with the attach request:
+
+    http-reverse-proxy attach --forward 1234 --secret mytoken \
+        -H "X-Region:us-east-1" -H "X-Instance:abc123" A:8000
 
 ## Protocol
 
 1. B sends `POST /__reverse_proxy` with `Upgrade: reverse-proxy` and
-   `X-Reverse-Proxy-Secret` headers
+   `X-Reverse-Proxy-Secret` headers (plus any `-H` headers)
 2. A validates the secret (constant-time), hijacks the connection,
    replies `101 Switching Protocols`
 3. Magic byte exchange for synchronization

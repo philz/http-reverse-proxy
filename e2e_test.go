@@ -389,3 +389,41 @@ func TestBackendErrorForwarded(t *testing.T) {
 		t.Errorf("status = %d, want 500", resp.StatusCode)
 	}
 }
+
+func TestExtraAttachHeaders(t *testing.T) {
+	backend := startBackend(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, "ok")
+	}))
+
+	serverAddr, srv := startServer(t, "s")
+
+	extra := http.Header{}
+	extra.Set("X-Region", "us-east-1")
+	extra.Set("X-Instance", "abc123")
+	go dialAndServe(serverAddr, "s", backend, extra)
+
+	// Wait for attach.
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		resp, err := http.Get("http://" + serverAddr + "/healthcheck")
+		if err == nil {
+			io.ReadAll(resp.Body)
+			resp.Body.Close()
+			if resp.StatusCode != http.StatusBadGateway {
+				break
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	srv.mu.Lock()
+	h := srv.attachHeaders
+	srv.mu.Unlock()
+
+	if got := h.Get("X-Region"); got != "us-east-1" {
+		t.Errorf("X-Region = %q, want %q", got, "us-east-1")
+	}
+	if got := h.Get("X-Instance"); got != "abc123" {
+		t.Errorf("X-Instance = %q, want %q", got, "abc123")
+	}
+}

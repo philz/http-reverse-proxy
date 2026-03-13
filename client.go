@@ -24,11 +24,11 @@ func (c *bufferedConn) Read(p []byte) (int, error) {
 	return c.r.Read(p)
 }
 
-func runClient(localPort, serverAddr, secret string) error {
-	return dialAndServe(serverAddr, secret, "localhost:"+localPort)
+func runClient(localPort, serverAddr, secret string, extraHeaders http.Header) error {
+	return dialAndServe(serverAddr, secret, "localhost:"+localPort, extraHeaders)
 }
 
-func dialAndServe(serverAddr, secret, targetAddr string) error {
+func dialAndServe(serverAddr, secret, targetAddr string, extraHeaders ...http.Header) error {
 	conn, err := net.Dial("tcp", serverAddr)
 	if err != nil {
 		return fmt.Errorf("dial %s: %w", serverAddr, err)
@@ -43,6 +43,13 @@ func dialAndServe(serverAddr, secret, targetAddr string) error {
 	req.Header.Set("Connection", "Upgrade")
 	req.Header.Set("Upgrade", upgradeName)
 	req.Header.Set(secretHeader, secret)
+	if len(extraHeaders) > 0 {
+		for k, vals := range extraHeaders[0] {
+			for _, v := range vals {
+				req.Header.Set(k, v)
+			}
+		}
+	}
 
 	if err := req.Write(conn); err != nil {
 		conn.Close()
