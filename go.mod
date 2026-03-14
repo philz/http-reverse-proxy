@@ -1,4 +1,4 @@
-module github.com/philipjacobs/http-reverse-proxy
+module github.com/philz/http-reverse-proxy
 
 go 1.25.4
 

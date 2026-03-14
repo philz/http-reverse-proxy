@@ -26,6 +26,16 @@ connection hijacking and HTTP/2 multiplexing as the transport, so
 the proxied traffic is plain HTTP and works with standard HTTP
 clients and servers with no tunneling overhead.
 
+## Install / run
+
+With Go installed, run directly from GitHub:
+
+    go run github.com/philz/http-reverse-proxy@latest <subcommand> [flags]
+
+Or install it:
+
+    go install github.com/philz/http-reverse-proxy@latest
+
 ## Usage
 
 On the public machine (A):
