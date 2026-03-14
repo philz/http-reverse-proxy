@@ -1,4 +1,11 @@
+Warning: this is vibe coded based on an idea @crawshaw told me about.
+
 # http-reverse-proxy
+
+If B can connect to A, but A can't connect to B, you can
+use this tunnel to allow A to connect to B. It works
+by doing a request from B to A, and then hijacking
+the underlying TCP connection.
 
 Tunnels HTTP requests to a server behind a firewall by reversing the
 connection direction. The firewalled machine connects *out* to the
@@ -42,8 +49,7 @@ Pass `-H` to send additional headers with the attach request:
 
 1. B sends `POST /__reverse_proxy` with `Upgrade: reverse-proxy` and
    `X-Reverse-Proxy-Secret` headers (plus any `-H` headers)
-2. A validates the secret (constant-time), hijacks the connection,
-   replies `101 Switching Protocols`
+2. A validates the secret, hijacks the connection, replies `101 Switching Protocols`
 3. Magic byte exchange for synchronization
 4. A creates an HTTP/2 client, B starts an HTTP/2 server — both over
    the same TCP connection
