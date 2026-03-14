@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"crypto/tls"
 	"fmt"
 	"io"
 	"log"
@@ -28,14 +29,38 @@ func runClient(localPort, serverAddr, secret string, extraHeaders http.Header) e
 	return dialAndServe(serverAddr, secret, "localhost:"+localPort, extraHeaders)
 }
 
-func dialAndServe(serverAddr, secret, targetAddr string, extraHeaders ...http.Header) error {
-	conn, err := net.Dial("tcp", serverAddr)
+func dialAndServe(serverURL, secret, targetAddr string, extraHeaders ...http.Header) error {
+	u, err := url.Parse(serverURL)
 	if err != nil {
-		return fmt.Errorf("dial %s: %w", serverAddr, err)
+		return fmt.Errorf("parse server URL: %w", err)
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return fmt.Errorf("server URL must be http:// or https://, got %q", serverURL)
+	}
+
+	host := u.Hostname()
+	port := u.Port()
+	if port == "" {
+		if u.Scheme == "https" {
+			port = "443"
+		} else {
+			port = "80"
+		}
+	}
+	dialAddr := net.JoinHostPort(host, port)
+
+	var conn net.Conn
+	if u.Scheme == "https" {
+		conn, err = tls.Dial("tcp", dialAddr, &tls.Config{ServerName: host})
+	} else {
+		conn, err = net.Dial("tcp", dialAddr)
+	}
+	if err != nil {
+		return fmt.Errorf("dial %s: %w", dialAddr, err)
 	}
 
 	// Send the upgrade request.
-	req, err := http.NewRequest("POST", "http://"+serverAddr+attachPath, nil)
+	req, err := http.NewRequest("POST", u.JoinPath(attachPath).String(), nil)
 	if err != nil {
 		conn.Close()
 		return err

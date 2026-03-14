@@ -13,10 +13,12 @@ public server; the public server then sends requests *back* through
 that connection.
 
 ```
-         internet            firewall
- client ──────→ server A ╌╌╌╌╌╌╌╌╌╌╌→ server B ──→ localhost:PORT
-                :8000      (H2 over     :8000        :1234
-                          hijacked TCP)
+         internet                        firewall
+ client ──────→ server A (serve)  ╌╌╌╌╌╌╌╌╌╌╌→ server B ──→ localhost:PORT
+                :8001             (H2 over      :8000        :1234
+                                 hijacked TCP)
+         B ────→ server A (attach)
+                  :8000
 ```
 
 This is analogous to `ssh -R 1234:localhost:1234 remote` — the
@@ -40,20 +42,27 @@ Or install it:
 
 On the public machine (A):
 
-    http-reverse-proxy listen --addr :8000 --secret mytoken
+    http-reverse-proxy listen --attach-addr :8000 --serve-addr :8001 --secret mytoken
 
 On the firewalled machine (B):
 
-    http-reverse-proxy attach --forward 1234 --secret mytoken A:8000
+    http-reverse-proxy attach --forward 1234 --secret mytoken http://A:8000
 
-Requests to `A:8000` are now forwarded to `B:1234`.
+Requests to `A:8001` are now forwarded to `B:1234`. The attach connection comes in on `:8000`.
 
 ### Extra headers
 
 Pass `-H` to send additional headers with the attach request:
 
     http-reverse-proxy attach --forward 1234 --secret mytoken \
-        -H "X-Region:us-east-1" -H "X-Instance:abc123" A:8000
+        -H "X-Region:us-east-1" -H "X-Instance:abc123" http://A:8000
+
+### HTTPS
+
+The server URL can be `https://` for TLS connections (e.g. through a reverse proxy):
+
+    http-reverse-proxy attach --forward 1234 --secret mytoken \
+        -H "Authorization:Bearer $TOKEN" https://myvm.example.com
 
 ## Protocol
 

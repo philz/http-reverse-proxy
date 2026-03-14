@@ -24,31 +24,44 @@ func startBackend(t *testing.T, handler http.Handler) (addr string) {
 	return ln.Addr().String()
 }
 
-func startServer(t *testing.T, secret string) (addr string, s *server) {
+func startServer(t *testing.T, secret string) (attachAddr, serveAddr string, s *server) {
 	t.Helper()
 	s = &server{secret: secret}
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
+
+	attachLn, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
-	srv := &http.Server{Handler: s}
+	serveLn, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	attachMux := http.NewServeMux()
+	attachMux.HandleFunc(attachPath, s.handleAttach)
+	attachSrv := &http.Server{Handler: attachMux}
+
+	serveSrv := &http.Server{Handler: http.HandlerFunc(s.handleProxy)}
+
 	t.Cleanup(func() {
 		s.close()
-		srv.Close()
+		attachSrv.Close()
+		serveSrv.Close()
 	})
-	go srv.Serve(ln)
-	return ln.Addr().String(), s
+	go attachSrv.Serve(attachLn)
+	go serveSrv.Serve(serveLn)
+	return attachLn.Addr().String(), serveLn.Addr().String(), s
 }
 
-func startClient(t *testing.T, serverAddr, secret, backendAddr string) {
+func startClient(t *testing.T, attachAddr, serveAddr, secret, backendAddr string) {
 	t.Helper()
 
-	go dialAndServe(serverAddr, secret, backendAddr)
+	go dialAndServe("http://"+attachAddr, secret, backendAddr)
 
 	// Wait for the client to attach by polling.
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		resp, err := http.Get("http://" + serverAddr + "/healthcheck")
+		resp, err := http.Get("http://" + serveAddr + "/healthcheck")
 		if err == nil {
 			io.ReadAll(resp.Body)
 			resp.Body.Close()
@@ -66,10 +79,10 @@ func TestBasicProxy(t *testing.T) {
 		fmt.Fprintf(w, "hello from backend: %s", r.URL.Path)
 	}))
 
-	serverAddr, _ := startServer(t, "test-secret")
-	startClient(t, serverAddr, "test-secret", backend)
+	attachAddr, serveAddr, _ := startServer(t, "test-secret")
+	startClient(t, attachAddr, serveAddr, "test-secret", backend)
 
-	resp, err := http.Get("http://" + serverAddr + "/foo/bar")
+	resp, err := http.Get("http://" + serveAddr + "/foo/bar")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -85,10 +98,10 @@ func TestQueryStringPreserved(t *testing.T) {
 		fmt.Fprintf(w, "q=%s", r.URL.Query().Get("q"))
 	}))
 
-	serverAddr, _ := startServer(t, "s")
-	startClient(t, serverAddr, "s", backend)
+	attachAddr, serveAddr, _ := startServer(t, "s")
+	startClient(t, attachAddr, serveAddr, "s", backend)
 
-	resp, err := http.Get("http://" + serverAddr + "/search?q=hello+world")
+	resp, err := http.Get("http://" + serveAddr + "/search?q=hello+world")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -104,10 +117,10 @@ func TestRequestHeaders(t *testing.T) {
 		fmt.Fprintf(w, "x-custom=%s", r.Header.Get("X-Custom"))
 	}))
 
-	serverAddr, _ := startServer(t, "s")
-	startClient(t, serverAddr, "s", backend)
+	attachAddr, serveAddr, _ := startServer(t, "s")
+	startClient(t, attachAddr, serveAddr, "s", backend)
 
-	req, _ := http.NewRequest("GET", "http://"+serverAddr+"/", nil)
+	req, _ := http.NewRequest("GET", "http://"+serveAddr+"/", nil)
 	req.Header.Set("X-Custom", "test-value")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -127,10 +140,10 @@ func TestResponseHeaders(t *testing.T) {
 		fmt.Fprint(w, "created")
 	}))
 
-	serverAddr, _ := startServer(t, "s")
-	startClient(t, serverAddr, "s", backend)
+	attachAddr, serveAddr, _ := startServer(t, "s")
+	startClient(t, attachAddr, serveAddr, "s", backend)
 
-	resp, err := http.Get("http://" + serverAddr + "/")
+	resp, err := http.Get("http://" + serveAddr + "/")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -149,10 +162,10 @@ func TestPOSTWithBody(t *testing.T) {
 		fmt.Fprintf(w, "method=%s body=%s", r.Method, string(body))
 	}))
 
-	serverAddr, _ := startServer(t, "s")
-	startClient(t, serverAddr, "s", backend)
+	attachAddr, serveAddr, _ := startServer(t, "s")
+	startClient(t, attachAddr, serveAddr, "s", backend)
 
-	resp, err := http.Post("http://"+serverAddr+"/submit", "text/plain", strings.NewReader("payload"))
+	resp, err := http.Post("http://"+serveAddr+"/submit", "text/plain", strings.NewReader("payload"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -168,11 +181,11 @@ func TestHTTPMethods(t *testing.T) {
 		fmt.Fprint(w, r.Method)
 	}))
 
-	serverAddr, _ := startServer(t, "s")
-	startClient(t, serverAddr, "s", backend)
+	attachAddr, serveAddr, _ := startServer(t, "s")
+	startClient(t, attachAddr, serveAddr, "s", backend)
 
 	for _, method := range []string{"GET", "POST", "PUT", "DELETE", "PATCH", "HEAD"} {
-		req, _ := http.NewRequest(method, "http://"+serverAddr+"/", nil)
+		req, _ := http.NewRequest(method, "http://"+serveAddr+"/", nil)
 		resp, err := http.DefaultClient.Do(req)
 		if err != nil {
 			t.Fatalf("%s: %v", method, err)
@@ -193,9 +206,9 @@ func TestHTTPMethods(t *testing.T) {
 }
 
 func TestWrongSecret(t *testing.T) {
-	serverAddr, _ := startServer(t, "correct-secret")
+	attachAddr, _, _ := startServer(t, "correct-secret")
 
-	err := dialAndServe(serverAddr, "wrong-secret", "127.0.0.1:1")
+	err := dialAndServe("http://"+attachAddr, "wrong-secret", "127.0.0.1:1")
 	if err == nil {
 		t.Fatal("expected error with wrong secret")
 	}
@@ -205,18 +218,18 @@ func TestWrongSecret(t *testing.T) {
 }
 
 func TestMissingSecret(t *testing.T) {
-	serverAddr, _ := startServer(t, "the-secret")
+	attachAddr, _, _ := startServer(t, "the-secret")
 
-	err := dialAndServe(serverAddr, "", "127.0.0.1:1")
+	err := dialAndServe("http://"+attachAddr, "", "127.0.0.1:1")
 	if err == nil {
 		t.Fatal("expected error with empty secret")
 	}
 }
 
 func TestNoBackendConnected(t *testing.T) {
-	serverAddr, _ := startServer(t, "s")
+	_, serveAddr, _ := startServer(t, "s")
 
-	resp, err := http.Get("http://" + serverAddr + "/anything")
+	resp, err := http.Get("http://" + serveAddr + "/anything")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -227,9 +240,9 @@ func TestNoBackendConnected(t *testing.T) {
 }
 
 func TestAttachEndpointBadUpgrade(t *testing.T) {
-	serverAddr, _ := startServer(t, "s")
+	attachAddr, _, _ := startServer(t, "s")
 
-	resp, err := http.Get("http://" + serverAddr + attachPath)
+	resp, err := http.Get("http://" + attachAddr + attachPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -240,15 +253,15 @@ func TestAttachEndpointBadUpgrade(t *testing.T) {
 }
 
 func TestBadMagic(t *testing.T) {
-	serverAddr, _ := startServer(t, "s")
+	attachAddr, _, _ := startServer(t, "s")
 
-	conn, err := net.Dial("tcp", serverAddr)
+	conn, err := net.Dial("tcp", attachAddr)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer conn.Close()
 
-	req, _ := http.NewRequest("POST", "http://"+serverAddr+attachPath, nil)
+	req, _ := http.NewRequest("POST", "http://"+attachAddr+attachPath, nil)
 	req.Header.Set("Connection", "Upgrade")
 	req.Header.Set("Upgrade", upgradeName)
 	req.Header.Set(secretHeader, "s")
@@ -278,8 +291,8 @@ func TestConcurrentRequests(t *testing.T) {
 		fmt.Fprintf(w, "path=%s", r.URL.Path)
 	}))
 
-	serverAddr, _ := startServer(t, "s")
-	startClient(t, serverAddr, "s", backend)
+	attachAddr, serveAddr, _ := startServer(t, "s")
+	startClient(t, attachAddr, serveAddr, "s", backend)
 
 	const n = 10
 	var wg sync.WaitGroup
@@ -289,7 +302,7 @@ func TestConcurrentRequests(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			path := fmt.Sprintf("/req/%d", i)
-			resp, err := http.Get("http://" + serverAddr + path)
+			resp, err := http.Get("http://" + serveAddr + path)
 			if err != nil {
 				errs[i] = err
 				return
@@ -315,11 +328,11 @@ func TestLargeBody(t *testing.T) {
 		io.Copy(w, r.Body)
 	}))
 
-	serverAddr, _ := startServer(t, "s")
-	startClient(t, serverAddr, "s", backend)
+	attachAddr, serveAddr, _ := startServer(t, "s")
+	startClient(t, attachAddr, serveAddr, "s", backend)
 
 	bigBody := strings.Repeat("x", 1<<20)
-	resp, err := http.Post("http://"+serverAddr+"/upload", "application/octet-stream", strings.NewReader(bigBody))
+	resp, err := http.Post("http://"+serveAddr+"/upload", "application/octet-stream", strings.NewReader(bigBody))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -344,8 +357,8 @@ func TestMultiplePaths(t *testing.T) {
 		}
 	}))
 
-	serverAddr, _ := startServer(t, "s")
-	startClient(t, serverAddr, "s", backend)
+	attachAddr, serveAddr, _ := startServer(t, "s")
+	startClient(t, attachAddr, serveAddr, "s", backend)
 
 	for _, tc := range []struct {
 		path string
@@ -357,7 +370,7 @@ func TestMultiplePaths(t *testing.T) {
 		{"/c", "gamma", 200},
 		{"/d", "404 page not found\n", 404},
 	} {
-		resp, err := http.Get("http://" + serverAddr + tc.path)
+		resp, err := http.Get("http://" + serveAddr + tc.path)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -377,10 +390,10 @@ func TestBackendErrorForwarded(t *testing.T) {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 	}))
 
-	serverAddr, _ := startServer(t, "s")
-	startClient(t, serverAddr, "s", backend)
+	attachAddr, serveAddr, _ := startServer(t, "s")
+	startClient(t, attachAddr, serveAddr, "s", backend)
 
-	resp, err := http.Get("http://" + serverAddr + "/fail")
+	resp, err := http.Get("http://" + serveAddr + "/fail")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -395,17 +408,17 @@ func TestExtraAttachHeaders(t *testing.T) {
 		fmt.Fprint(w, "ok")
 	}))
 
-	serverAddr, srv := startServer(t, "s")
+	attachAddr, serveAddr, srv := startServer(t, "s")
 
 	extra := http.Header{}
 	extra.Set("X-Region", "us-east-1")
 	extra.Set("X-Instance", "abc123")
-	go dialAndServe(serverAddr, "s", backend, extra)
+	go dialAndServe("http://"+attachAddr, "s", backend, extra)
 
 	// Wait for attach.
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		resp, err := http.Get("http://" + serverAddr + "/healthcheck")
+		resp, err := http.Get("http://" + serveAddr + "/healthcheck")
 		if err == nil {
 			io.ReadAll(resp.Body)
 			resp.Body.Close()

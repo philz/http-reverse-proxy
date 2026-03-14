@@ -32,17 +32,22 @@ type server struct {
 	attachHeaders http.Header  // headers from the most recent attach request
 }
 
-func runServer(addr, secret string) error {
+func runServer(attachAddr, serveAddr, secret string) error {
 	s := &server{secret: secret}
-	return http.ListenAndServe(addr, s)
-}
 
-func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path == attachPath {
-		s.handleAttach(w, r)
-		return
-	}
-	s.handleProxy(w, r)
+	// Listen for attach connections on one port.
+	attachMux := http.NewServeMux()
+	attachMux.HandleFunc(attachPath, s.handleAttach)
+	go func() {
+		log.Printf("attach endpoint on %s%s", attachAddr, attachPath)
+		if err := http.ListenAndServe(attachAddr, attachMux); err != nil {
+			log.Fatal(err)
+		}
+	}()
+
+	// Serve proxied traffic on a separate port.
+	log.Printf("serving proxied traffic on %s", serveAddr)
+	return http.ListenAndServe(serveAddr, http.HandlerFunc(s.handleProxy))
 }
 
 func (s *server) handleAttach(w http.ResponseWriter, r *http.Request) {

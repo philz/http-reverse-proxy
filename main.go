@@ -26,14 +26,15 @@ func main() {
 
 func usage() {
 	fmt.Fprintln(os.Stderr, `usage:
-  http-reverse-proxy listen --addr :8000 --secret TOKEN
-  http-reverse-proxy attach --forward PORT --secret TOKEN [-H Key:Value]... SERVER_ADDR`)
+  http-reverse-proxy listen --attach-addr :8000 --serve-addr :8001 --secret TOKEN
+  http-reverse-proxy attach --forward PORT --secret TOKEN [-H Key:Value]... SERVER_URL`)
 	os.Exit(1)
 }
 
 func listenCmd(args []string) {
 	fs := flag.NewFlagSet("listen", flag.ExitOnError)
-	addr := fs.String("addr", ":8000", "Listen address")
+	attachAddr := fs.String("attach-addr", ":8000", "Address for attach connections")
+	serveAddr := fs.String("serve-addr", ":8001", "Address for serving proxied traffic")
 	secret := fs.String("secret", "", "Shared secret")
 	fs.Parse(args)
 
@@ -42,8 +43,7 @@ func listenCmd(args []string) {
 		os.Exit(1)
 	}
 
-	log.Printf("listening on %s", *addr)
-	if err := runServer(*addr, *secret); err != nil {
+	if err := runServer(*attachAddr, *serveAddr, *secret); err != nil {
 		log.Fatal(err)
 	}
 }
@@ -77,7 +77,7 @@ func attachCmd(args []string) {
 		os.Exit(1)
 	}
 	if fs.NArg() != 1 {
-		fmt.Fprintln(os.Stderr, "usage: http-reverse-proxy attach --forward PORT --secret TOKEN SERVER_ADDR")
+		fmt.Fprintln(os.Stderr, "usage: http-reverse-proxy attach --forward PORT --secret TOKEN SERVER_URL")
 		os.Exit(1)
 	}
 
